@@ -34,7 +34,7 @@ default_settings = {
     'samples_rx': 200000,
 
     # How many frequency bins TX is offset from RX:
-    'offset': 10,
+    'offset': 20,
 }
 
 class Measurer:
@@ -121,16 +121,33 @@ class Measurer:
         #print(meas_begin)
         return self.rxbuffer[meas_begin : meas_end]
 
-    def calculate_harmonics(self, rx):
-        """Calculate the levels of harmonics from a received signal."""
-        # Rectangular FFT window is OK here, since all the harmonics should
-        # have an integer number of cycles within the measurement interval.
-        fft = np.fft.fft(rx)
-        # TODO
-        print(abs(fft))
-
     def measure_harmonics(self, freq):
-        return self.calculate_harmonics(self.measure(freq))
+        return calculate_harmonics(self.measure(freq), self.settings['offset'])
+
+
+def calculate_harmonics(rx, offset):
+    """Calculate the levels of harmonics from a received signal.
+
+    Return value is a tuple with the following elements:
+    * Array of harmonic numbers
+    * Array of harmonic levels, in dB
+    * Array of harmonic levels on the image frequency, in dB"""
+    # Rectangular FFT window is OK here, since all the harmonics should
+    # have an integer number of cycles within the measurement interval.
+    f = np.fft.fft(rx)
+    f_dB = np.log10(f.real**2 + f.imag**2) * 10
+
+    maxbin = len(f) / 2
+    harmonic_nums = np.arange(1, maxbin // offset, 2, dtype=np.int)
+    # An I/Q mixer driven by a square wave is sensitive to odd harmonics
+    # of its LO frequency. For every second of these, the spectrum is
+    # "inverted" because 90° phase shift becomes a -90° phase shift,
+    # so we want the bins 1, -3, 5, -7...
+    harmonic_bins = harmonic_nums * offset * \
+        np.repeat((1,-1), len(harmonic_nums))[0:len(harmonic_nums)]
+    # Also return the image frequencies though
+    image_bins = -harmonic_bins
+    return (harmonic_nums, f_dB[harmonic_bins], f_dB[image_bins])
 
 def test():
     measurer = Measurer(default_settings)

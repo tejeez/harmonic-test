@@ -5,22 +5,25 @@ import numpy as np
 
 settings = measurer.default_settings
 
-def plot_spectrum(buf):
-    """Plot spectrum from a buffer of signal"""
-    fft = np.fft.fftshift(np.fft.fft(buf))
-    fft_dB = np.log10(fft.real**2 + fft.imag**2) * 10
-    harmonic_numbers = np.fft.fftshift(
-        np.fft.fftfreq(
-            len(fft),
-            settings['offset'] / settings['samples_meas']))
-    plt.plot(harmonic_numbers, fft_dB)
-
 meas = measurer.Measurer(settings)
 
-rxbuf = meas.measure(432e6)
+freqs = np.arange(100e6, 3.4e9, 100e6)
+results = list(meas.measure_harmonics(freq) for freq in freqs)
 
-plot_spectrum(rxbuf)
-plt.xlabel("Harmonic number")
-plt.ylabel("Received dB")
+plt.xlabel('TX frequency (MHz)')
+plt.ylabel('Received (dB)')
+legends = []
+#for hi, hn in enumerate(results[0][0]):  # Loop through harmonic numbers
+for hi, hn in enumerate(results[0][0][0:4]):  # Or maybe only the first few
+    # One harmonic as a function of frequency:
+    harmonic_dB = list(results[i][1][hi] for i in range(len(freqs)))
+    # Image frequencies:
+    image_dB =    list(results[i][2][hi] for i in range(len(freqs)))
+
+    plt.plot(freqs, harmonic_dB)
+    legends.append('Harmonic %d' % hn)
+    plt.plot(freqs, image_dB)
+    legends.append('Image of harmonic %d' % hn)
+plt.legend(legends)
 plt.grid()
 plt.show()
