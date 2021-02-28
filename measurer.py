@@ -3,6 +3,7 @@
 import SoapySDR
 from SoapySDR import *
 import numpy as np
+import math
 
 default_settings = {
     'device_args': {'driver': 'lime'},
@@ -11,24 +12,31 @@ default_settings = {
     'tx_channel': 0,
     'rx_antenna': 'LNAH',
     'tx_antenna': 'BAND1',
-    'rx_gains': (20,),
-    'tx_gains': (60,),
+    'rx_gains': (
+        ('LNA', 10),   # 0 to 30
+        ('TIA', 0),   # 0 to 12
+        ('PGA', 10),   # -12 to 19
+    ),
+    'tx_gains': (
+        ('PAD', 40),  # 0 to 52
+        ('IAMP', 0), # -12 to 12
+    ),
 
-    'samplerate': 1e6,
+    'samplerate': 0.96e6,
 
-    'tx_amplitude': 1.0, # Value of I/Q samples written to TX
+    'tx_amplitude': 0.5, # Value of I/Q samples written to TX
 
     # How much into future TX burst is timed (nanoseconds), needed to deal with latency:
     'tx_time': int(15e6),
 
     # Length of measurement interval in samples.
     # This also becomes the size of the FFT used to find harmonics:
-    'samples_meas': 512,
+    'samples_meas': 2048,
     # Extra samples to transmit before the measurement interval,
     # maybe useful to let all the filters settle first:
-    'samples_begin': 100,
+    'samples_begin': 500,
     # Extra samples to transmit after the measurement interval:
-    'samples_end': 100,
+    'samples_end': 500,
     # Number of samples received. It should be enough to fit the transmit
     # burst within the buffer, considering tx_time as well:
     'samples_rx': 200000,
@@ -61,18 +69,18 @@ class Measurer:
         self.sdr.setAntenna(SOAPY_SDR_RX, settings['rx_channel'], settings['rx_antenna'])
         self.sdr.setAntenna(SOAPY_SDR_TX, settings['tx_channel'], settings['tx_antenna'])
 
-        # In gain settings, use the combined gain if the value is not a tuple.
-        # If it is, the first element is the name of the gain and the second is the value.
+        for g in self.sdr.listGains(SOAPY_SDR_RX, settings['rx_channel']):
+            print('RX gain range:', g, self.sdr.getGainRange(SOAPY_SDR_RX, settings['rx_channel'], g))
+        for g in self.sdr.listGains(SOAPY_SDR_TX, settings['tx_channel']):
+            print('TX gain range:', g, self.sdr.getGainRange(SOAPY_SDR_TX, settings['tx_channel'], g))
+
+        # In gain settings, use the combined gain if a single-element tuple.
+        # If there are two, the first element is the name of the gain and the second is the value.
+        self.sdr.setGain(SOAPY_SDR_RX, 0, 'LNA', 0.0)
         for g in settings['rx_gains']:
-            if g is tuple:
-                self.sdr.setGain(SOAPY_SDR_RX, settings['rx_channel'], g[0], g[1])
-            else:
-                self.sdr.setGain(SOAPY_SDR_RX, settings['rx_channel'], g)
+            self.sdr.setGain(SOAPY_SDR_RX, settings['rx_channel'], *g)
         for g in settings['tx_gains']:
-            if g is tuple:
-                self.sdr.setGain(SOAPY_SDR_TX, settings['tx_channel'], g[0], g[1])
-            else:
-                self.sdr.setGain(SOAPY_SDR_TX, settings['tx_channel'], g)
+            self.sdr.setGain(SOAPY_SDR_TX, settings['tx_channel'], *g)
 
         self.rxstream = self.sdr.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
         self.txstream = self.sdr.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
@@ -134,8 +142,12 @@ def calculate_harmonics(rx, offset):
     * Array of harmonic levels on the image frequency, in dB"""
     # Rectangular FFT window is OK here, since all the harmonics should
     # have an integer number of cycles within the measurement interval.
-    f = np.fft.fft(rx)
-    f_dB = np.log10(f.real**2 + f.imag**2) * 10
+    # But let's still try a Hann window, because it might reject
+    # interference from other frequencies better...
+    #f = np.fft.fft(rx)  # Rectangular
+    f = np.fft.fft(rx * np.hanning(len(rx)))  # Hann
+    scaling_dB = math.log10(len(rx)) * -20 + 6.02   # +6 needed for Hann window
+    f_dB = np.log10(f.real**2 + f.imag**2) * 10 + scaling_dB
 
     maxbin = len(f) / 2
     harmonic_nums = np.arange(1, maxbin // offset, 2, dtype=np.int)
@@ -144,15 +156,22 @@ def calculate_harmonics(rx, offset):
     # "inverted" because 90° phase shift becomes a -90° phase shift,
     # so we want the bins 1, -3, 5, -7...
     harmonic_bins = harmonic_nums * offset * \
-        np.repeat((1,-1), len(harmonic_nums))[0:len(harmonic_nums)]
+        np.tile((1,-1), len(harmonic_nums))[0:len(harmonic_nums)]
     # Also return the image frequencies though
     image_bins = -harmonic_bins
     return (harmonic_nums, f_dB[harmonic_bins], f_dB[image_bins])
 
-def test():
+def test_scaling(samples_rx = 1024, offset = 10):
+    """Test that scaling for a full-scale sine wave is correct.
+    # It should return a value close to 0 dB on the first harmonic."""
+    phase = np.linspace(0, np.pi*2 * offset, samples_rx, endpoint=False)
+    print(calculate_harmonics(np.cos(phase) + np.sin(phase)*1j, offset))
+
+def test_measurement():
     measurer = Measurer(default_settings)
     for f in np.linspace(2.4e9, 2.45e9, 50):
         print(measurer.measure_harmonics(f))
 
 if __name__ == '__main__':
-    test()
+    #test_scaling()
+    test_measurement()

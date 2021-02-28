@@ -7,11 +7,17 @@ settings = measurer.default_settings
 
 meas = measurer.Measurer(settings)
 
-freqs = np.arange(100e6, 3.4e9, 100e6)
+#freqs = np.arange(100e6, 3.7e9, 50e6)
+freqs = np.concatenate((
+    np.arange(2.3e9/7, 2.45e9/7, 2e6/7),
+    #np.arange(2.3e9/5, 2.45e9/5, 2e6/5),
+    #np.arange(2.3e9/3, 2.45e9/3, 2e6/3),
+    #np.arange(2.3e9, 2.45e9, 2e6),
+))
 results = list(meas.measure_harmonics(freq) for freq in freqs)
 
-plt.xlabel('TX frequency (MHz)')
-plt.ylabel('Received (dB)')
+plt.xlabel('TX frequency (Hz)')
+plt.ylabel('Received (dBFS)')
 legends = []
 #for hi, hn in enumerate(results[0][0]):  # Loop through harmonic numbers
 for hi, hn in enumerate(results[0][0][0:4]):  # Or maybe only the first few
