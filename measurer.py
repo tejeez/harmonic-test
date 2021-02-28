@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Module to control an SDR and perform measurements using it."""
 import SoapySDR
 from SoapySDR import *
 import numpy as np
@@ -10,22 +11,49 @@ default_settings = {
     'tx_channel': 0,
     'rx_antenna': 'LNAH',
     'tx_antenna': 'BAND1',
-    'rx_gains': (40,),
+    'rx_gains': (20,),
     'tx_gains': (60,),
 
-    'samplerate': 1e5,
+    'samplerate': 1e6,
 
-    'rx_offset': 10000,  # RX frequency offset from TX
+    'tx_amplitude': 1.0, # Value of I/Q samples written to TX
 
-    'burst_samples': 100,  # TX burst length in samples
-    'tx_amplitude': 1.0,
-    'tx_time': int(10e6), # How much into future TX burst is timed (nanoseconds), needed to deal with latency
-    'rx_samples': 2000,
+    # How much into future TX burst is timed (nanoseconds), needed to deal with latency:
+    'tx_time': int(15e6),
+
+    # Length of measurement interval in samples.
+    # This also becomes the size of the FFT used to find harmonics:
+    'samples_meas': 512,
+    # Extra samples to transmit before the measurement interval,
+    # maybe useful to let all the filters settle first:
+    'samples_begin': 100,
+    # Extra samples to transmit after the measurement interval:
+    'samples_end': 100,
+    # Number of samples received. It should be enough to fit the transmit
+    # burst within the buffer, considering tx_time as well:
+    'samples_rx': 200000,
+
+    # How many frequency bins TX is offset from RX:
+    'offset': 10,
 }
 
 class Measurer:
     def __init__(self, settings):
+        # Some general setup
+
         self.settings = settings
+
+        self.rx_freq_offset = -settings['samplerate'] * settings['offset'] / settings['samples_meas']
+        print(self.rx_freq_offset)
+
+        # Generate the TX buffer
+        samples_tx = settings['samples_begin'] + settings['samples_meas'] + settings['samples_end']
+        self.txburst = np.ones(samples_tx, dtype=np.complex64) * settings['tx_amplitude']
+        # Preallocate the RX buffer too
+        self.rxbuffer = np.zeros(settings['samples_rx'], dtype=np.complex64)
+
+        # Initialize the SDR
+
         self.sdr = SoapySDR.Device(settings['device_args'])
         self.sdr.setSampleRate(SOAPY_SDR_RX, settings['rx_channel'], settings['samplerate'])
         self.sdr.setSampleRate(SOAPY_SDR_TX, settings['tx_channel'], settings['samplerate'])
@@ -49,8 +77,6 @@ class Measurer:
         self.rxstream = self.sdr.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)
         self.txstream = self.sdr.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32)
 
-        self.txburst = np.ones(settings['burst_samples'], dtype=np.complex64) * settings['tx_amplitude']
-
     def measure(self, freq):
         """Perform a measurement on a given frequency.
 
@@ -59,34 +85,57 @@ class Measurer:
 
         Receiver LO is tuned to some offset from this frequency, which should
         result in each harmonic being on a different "intermediate frequency".
+
+        Return the received signal during the measurement interval.
         """
-        self.sdr.setFrequency(SOAPY_SDR_RX, self.settings['rx_channel'], freq + self.settings['rx_offset'])
+        self.sdr.setFrequency(SOAPY_SDR_RX, self.settings['rx_channel'], freq + self.rx_freq_offset)
         self.sdr.setFrequency(SOAPY_SDR_TX, self.settings['tx_channel'], freq)
 
         self.sdr.activateStream(self.txstream)
         self.sdr.activateStream(self.rxstream)
-        tnow = self.sdr.getHardwareTime()
+        time_now = self.sdr.getHardwareTime()
+        tx_time = time_now + self.settings['tx_time']
 
         rt = self.sdr.writeStream(
             self.txstream,
             (self.txburst,), len(self.txburst),
             flags = SOAPY_SDR_END_BURST | SOAPY_SDR_HAS_TIME,
-            timeNs = tnow + self.settings['tx_time'])
+            timeNs = tx_time)
         print("TX:", rt)
 
-        rxbuf = np.zeros(self.settings['rx_samples'], dtype=np.complex64)
-        rr = self.sdr.readStream(self.rxstream, (rxbuf,), len(rxbuf))
+        rr = self.sdr.readStream(self.rxstream, (self.rxbuffer,), len(self.rxbuffer))
         print("RX:", rr)
-        print(np.mean(np.abs(rxbuf).reshape(-1, 100), axis=1))
 
         self.sdr.deactivateStream(self.txstream)
         self.sdr.deactivateStream(self.rxstream)
 
+        # Use timestamps to calculate where in the RX buffer the measurement interval is.
+        samples_per_ns = self.settings['samplerate'] * 1e-9
+        burst_begin = int((tx_time - rr.timeNs) * samples_per_ns)
+        meas_begin = burst_begin + self.settings['samples_begin']
+        meas_end = meas_begin + self.settings['samples_meas']
+        if meas_begin < 0:
+            raise ValueError("RX buffer was too late")
+        if meas_end > rr.ret:
+            raise ValueError("RX buffer was too short")
+        #print(meas_begin)
+        return self.rxbuffer[meas_begin : meas_end]
+
+    def calculate_harmonics(self, rx):
+        """Calculate the levels of harmonics from a received signal."""
+        # Rectangular FFT window is OK here, since all the harmonics should
+        # have an integer number of cycles within the measurement interval.
+        fft = np.fft.fft(rx)
+        # TODO
+        print(abs(fft))
+
+    def measure_harmonics(self, freq):
+        return self.calculate_harmonics(self.measure(freq))
 
 def test():
     measurer = Measurer(default_settings)
     for f in np.linspace(2.4e9, 2.45e9, 50):
-        measurer.measure(f)
+        print(measurer.measure_harmonics(f))
 
 if __name__ == '__main__':
     test()
