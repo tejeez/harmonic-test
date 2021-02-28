@@ -11,20 +11,20 @@ default_settings = {
     'rx_channel': 0,
     'tx_channel': 0,
     'rx_antenna': 'LNAH',
-    'tx_antenna': 'BAND1',
+    'tx_antenna': 'BAND2',
     'rx_gains': (
-        ('LNA', 10),   # 0 to 30
-        ('TIA', 0),   # 0 to 12
-        ('PGA', 10),   # -12 to 19
+        ('LNA', 20),   # 0 to 30
+        ('TIA', 9),   # 0 to 12
+        ('PGA', 12),   # -12 to 19
     ),
     'tx_gains': (
         ('PAD', 40),  # 0 to 52
-        ('IAMP', 0), # -12 to 12
+        ('IAMP', 12), # -12 to 12
     ),
 
     'samplerate': 0.96e6,
 
-    'tx_amplitude': 0.5, # Value of I/Q samples written to TX
+    'tx_amplitude': 1.0, # Value of I/Q samples written to TX
 
     # How much into future TX burst is timed (nanoseconds), needed to deal with latency:
     'tx_time': int(15e6),
@@ -97,7 +97,7 @@ class Measurer:
         Return the received signal during the measurement interval.
         """
         self.sdr.setFrequency(SOAPY_SDR_RX, self.settings['rx_channel'], freq + self.rx_freq_offset)
-        self.sdr.setFrequency(SOAPY_SDR_TX, self.settings['tx_channel'], freq)
+        self.sdr.setFrequency(SOAPY_SDR_TX, self.settings['tx_channel'], freq * 3 / 5)
 
         self.sdr.activateStream(self.txstream)
         self.sdr.activateStream(self.rxstream)
